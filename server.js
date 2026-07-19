@@ -140,13 +140,20 @@ app.get('/api/auth/me', auth, (req, res) => {
   res.json({ user: u });
 });
 
-// ---- Voting: initiate STK push ----
+// ---- Voting: check if device already voted ----
+app.get('/api/vote/check', (req, res) => {
+  const deviceId = String(req.query.deviceId || '').trim();
+  if (!deviceId) return res.json({ voted: false });
+  const row = db.prepare('SELECT device_id, nominee_id, created_at FROM device_votes WHERE device_id = ?').get(deviceId);
+  if (row) return res.json({ voted: true, nomineeId: row.nominee_id, at: row.created_at });
+  res.json({ voted: false });
+});
+
+// ---- Voting: initiate STK push (no auth — one vote per device) ----
 app.post('/api/vote/initiate', async (req, res) => {
   const { nomineeId, amount, phone, deviceId } = req.body || {};
-  if (!nomineeId || !amount || !deviceId) return res.status(400).json({ error: 'missing_fields' });
-  if (!/^[A-Za-z0-9-]{16,100}$/.test(String(deviceId))) return res.status(400).json({ error: 'invalid_device' });
-  const priorVote = db.prepare("SELECT id FROM transactions WHERE device_id = ? AND status = 'success'").get(deviceId);
-  if (priorVote) return res.status(409).json({ error: 'device_already_voted' });
+  if (!nomineeId || !amount) return res.status(400).json({ error: 'missing_fields' });
+  if (!deviceId || String(deviceId).length < 8) return res.status(400).json({ error: 'missing_device' });
 
   const amt = parseInt(amount, 10);
   if (!Number.isFinite(amt) || amt < VOTE_PRICE || amt % VOTE_PRICE !== 0) {
@@ -156,8 +163,11 @@ app.post('/api/vote/initiate', async (req, res) => {
   const nominee = db.prepare('SELECT id, name FROM nominees WHERE id = ?').get(nomineeId);
   if (!nominee) return res.status(404).json({ error: 'nominee_not_found' });
 
-  const rawPhone = phone;
-  const p = normalisePhone(rawPhone);
+  // Enforce one-vote-per-device
+  const already = db.prepare('SELECT device_id FROM device_votes WHERE device_id = ?').get(deviceId);
+  if (already) return res.status(409).json({ error: 'already_voted', message: 'You have already voted from this device.' });
+
+  const p = normalisePhone(phone);
   if (!isValidKenyanPhone(p)) return res.status(400).json({ error: 'invalid_phone' });
 
   const votes = Math.floor(amt / VOTE_PRICE);
@@ -173,8 +183,8 @@ app.post('/api/vote/initiate', async (req, res) => {
     const txId = uuid();
     db.prepare(`INSERT INTO transactions
       (id, checkout_id, user_id, device_id, nominee_id, phone, amount, votes, status, created_at)
-      VALUES (?, ?, NULL, ?, ?, ?, ?, ?, 'pending', ?)`)
-      .run(txId, stk.CheckoutRequestID, deviceId, nominee.id, p, amt, votes, Date.now());
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
+      .run(txId, stk.CheckoutRequestID, null, deviceId, nominee.id, p, amt, votes, Date.now());
 
     res.json({
       ok: true,
@@ -200,32 +210,23 @@ app.post('/api/vote/simulate-confirm', (req, res) => {
   const tx = db.prepare('SELECT * FROM transactions WHERE checkout_id = ?').get(checkoutId);
   if (!tx) return res.status(404).json({ error: 'tx_not_found' });
   if (tx.status !== 'pending') return res.status(400).json({ error: 'tx_already_processed', status: tx.status });
-  const priorDeviceVote = db.prepare("SELECT id FROM transactions WHERE device_id = ? AND status = 'success'").get(tx.device_id);
-  if (priorDeviceVote) return res.status(409).json({ error: 'device_already_voted' });
 
   // Simulate: any 4-digit PIN succeeds in sandbox mode
   const result = simulateConfirm(checkoutId, true);
   const receipt = result?.receipt || 'TEST' + Date.now().toString(36).toUpperCase();
 
   const update = db.transaction(() => {
-    const existing = db.prepare("SELECT id FROM transactions WHERE device_id = ? AND status = 'success'").get(tx.device_id);
-    if (existing) {
-      const err = new Error('device_already_voted');
-      err.code = 'DEVICE_ALREADY_VOTED';
-      throw err;
-    }
     db.prepare(`UPDATE transactions SET status='success', mpesa_receipt=?, completed_at=? WHERE id=?`)
       .run(receipt, Date.now(), tx.id);
     db.prepare(`UPDATE nominees SET paid_votes = paid_votes + ? WHERE id = ?`)
       .run(tx.votes, tx.nominee_id);
-  });
-  try { update(); }
-  catch (err) {
-    if (err.code === 'DEVICE_ALREADY_VOTED' || String(err.message).includes('idx_success_device_vote')) {
-      return res.status(409).json({ error: 'device_already_voted' });
+    // Lock this device — one vote per device
+    if (tx.device_id) {
+      db.prepare(`INSERT OR IGNORE INTO device_votes (device_id, nominee_id, created_at) VALUES (?, ?, ?)`)
+        .run(tx.device_id, tx.nominee_id, Date.now());
     }
-    throw err;
-  }
+  });
+  update();
 
   const nominee = db.prepare('SELECT id, name, base_votes, paid_votes FROM nominees WHERE id = ?').get(tx.nominee_id);
   res.json({
@@ -264,11 +265,6 @@ app.post('/api/mpesa/callback', (req, res) => {
     if (tx.status !== 'pending') return res.json({ ResultCode: 0, ResultDesc: 'Already handled' });
 
     if (stk.ResultCode === 0) {
-      const priorDeviceVote = db.prepare("SELECT id FROM transactions WHERE device_id = ? AND status = 'success'").get(tx.device_id);
-      if (priorDeviceVote) {
-        db.prepare(`UPDATE transactions SET status='failed', completed_at=? WHERE id=?`).run(Date.now(), tx.id);
-        return res.json({ ResultCode: 0, ResultDesc: 'Duplicate device vote rejected' });
-      }
       const items = stk.CallbackMetadata?.Item || [];
       const receiptItem = items.find(i => i.Name === 'MpesaReceiptNumber');
       const receipt = receiptItem?.Value || ('MP' + Date.now().toString(36).toUpperCase());
@@ -277,6 +273,10 @@ app.post('/api/mpesa/callback', (req, res) => {
           .run(receipt, Date.now(), tx.id);
         db.prepare(`UPDATE nominees SET paid_votes = paid_votes + ? WHERE id = ?`)
           .run(tx.votes, tx.nominee_id);
+        if (tx.device_id) {
+          db.prepare(`INSERT OR IGNORE INTO device_votes (device_id, nominee_id, created_at) VALUES (?, ?, ?)`)
+            .run(tx.device_id, tx.nominee_id, Date.now());
+        }
       });
       update();
     } else {
