@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gala Awards — Organiser Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700&family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/admin.css">
+</head>
+<body>
+
+<!-- LOGIN GATE -->
+<div id="loginView" class="login-view">
+  <div class="login-card">
+    <div class="seal-row">
+      <svg width="42" height="42" viewBox="0 0 40 40" fill="none">
+        <circle cx="20" cy="20" r="19" stroke="#c6a15b" stroke-width="1.2"/>
+        <circle cx="20" cy="20" r="14" stroke="#c6a15b" stroke-width="0.7"/>
+        <path d="M20 10 L22.5 17 L30 17 L23.8 21.6 L26.2 29 L20 24.4 L13.8 29 L16.2 21.6 L10 17 L17.5 17 Z" fill="#c6a15b"/>
+      </svg>
+      <div class="brand-block">
+        <div class="brand-title">Kirinyaga Gala Awards</div>
+        <div class="brand-sub">ORGANISER DASHBOARD · 2026</div>
+      </div>
+    </div>
+    <h1 class="login-h">Sign in</h1>
+    <p class="login-p">Restricted access. Enter your organiser credentials.</p>
+    <label class="field-label">Username</label>
+    <input type="text" id="adminUser" class="field" placeholder="admin" autocomplete="username">
+    <label class="field-label" style="margin-top:14px;">Password</label>
+    <input type="password" id="adminPass" class="field" placeholder="••••••••" autocomplete="current-password">
+    <div class="error-text" id="loginErr"></div>
+    <button class="primary-btn" id="loginBtn">Enter dashboard</button>
+    <div class="login-foot">Default: <strong>admin</strong> / <strong>gala2026</strong> — change in Render env.</div>
+  </div>
+</div>
+
+<!-- DASHBOARD -->
+<div id="dashView" class="dash-view" style="display:none;">
+  <aside class="side">
+    <div class="side-brand">
+      <svg width="30" height="30" viewBox="0 0 40 40" fill="none">
+        <circle cx="20" cy="20" r="19" stroke="#c6a15b" stroke-width="1.2"/>
+        <path d="M20 10 L22.5 17 L30 17 L23.8 21.6 L26.2 29 L20 24.4 L13.8 29 L16.2 21.6 L10 17 L17.5 17 Z" fill="#c6a15b"/>
+      </svg>
+      <div>
+        <div class="side-brand-t">Gala Awards</div>
+        <div class="side-brand-s">ORGANISER · 2026</div>
+      </div>
+    </div>
+    <nav class="side-nav">
+      <a class="nav-item active" data-view="overview"><span class="ni-dot"></span>Overview</a>
+      <a class="nav-item" data-view="leaderboard"><span class="ni-dot"></span>Leaderboard</a>
+      <a class="nav-item" data-view="transactions"><span class="ni-dot"></span>Transactions</a>
+      <a class="nav-item" data-view="wallet"><span class="ni-dot"></span>Wallet</a>
+      <a class="nav-item" data-view="voters"><span class="ni-dot"></span>Voters</a>
+      <a class="nav-item" data-view="manage"><span class="ni-dot"></span>Nominees</a>
+      <a class="nav-item" data-view="log"><span class="ni-dot"></span>Activity Log</a>
+    </nav>
+    <div class="side-foot">
+      <div class="side-user" id="sideUser">admin</div>
+      <button class="side-logout" id="logoutBtn">Sign out</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <div class="crumb" id="crumb">Overview</div>
+        <div class="crumb-sub" id="crumbSub">Live at-a-glance metrics</div>
+      </div>
+      <div class="top-right">
+        <div class="live-dot"><span></span> Live · auto-refresh 6s</div>
+        <button class="ghost-btn" id="refreshBtn">Refresh</button>
+      </div>
+    </header>
+
+    <!-- OVERVIEW -->
+    <section class="view" data-view="overview">
+      <div class="stats-grid" id="statsGrid"></div>
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Top nominees right now</h3>
+            <span class="panel-sub">Across all categories</span>
+          </div>
+          <div class="top-list" id="topList"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Latest successful payments</h3>
+            <span class="panel-sub">Real-time feed</span>
+          </div>
+          <div class="tx-mini" id="txMini"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- LEADERBOARD -->
+    <section class="view" data-view="leaderboard" style="display:none;">
+      <div class="panel">
+        <div class="panel-head">
+          <h3>Full leaderboard</h3>
+          <div class="panel-actions">
+            <input type="text" id="lbSearch" class="mini-input" placeholder="Search nominee…">
+            <button class="ghost-btn" id="exportLbBtn">Export CSV</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Category</th><th>Nominee</th>
+              <th class="num">Paid votes</th><th class="num">Bonus</th><th class="num">Total</th>
+              <th class="num">Revenue</th><th>Actions</th>
+            </tr></thead>
+            <tbody id="lbBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TRANSACTIONS -->
+    <section class="view" data-view="transactions" style="display:none;">
+      <div class="panel">
+        <div class="panel-head">
+          <h3>All transactions</h3>
+          <div class="panel-actions">
+            <select class="mini-input" id="txFilter">
+              <option value="">All statuses</option>
+              <option value="success">Success</option>
+              <option value="pending">Pending</option>
+              <option value="failed">Failed</option>
+            </select>
+            <input type="text" id="txSearch" class="mini-input" placeholder="Search receipt / phone…">
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Receipt</th><th>Status</th><th>Voter</th><th>Phone</th>
+              <th>Nominee</th><th>Category</th>
+              <th class="num">Amount</th><th class="num">Votes</th><th>Time</th>
+            </tr></thead>
+            <tbody id="txBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- WALLET -->
+    <section class="view" data-view="wallet" style="display:none;">
+      <div class="wallet-hero">
+        <div class="wallet-label">M-PESA WALLET BALANCE</div>
+        <div class="wallet-amt" id="walletAmt">KES 0</div>
+        <div class="wallet-sub" id="walletSub">Sum of all successful payments</div>
+      </div>
+      <div class="stats-grid" id="walletStats"></div>
+      <div class="panel">
+        <div class="panel-head"><h3>Successful payments</h3><span class="panel-sub">Only status = success</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Receipt</th><th>Voter</th><th>Phone</th><th>Nominee</th>
+              <th class="num">Amount</th><th class="num">Votes</th><th>Time</th>
+            </tr></thead>
+            <tbody id="walletBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- VOTERS -->
+    <section class="view" data-view="voters" style="display:none;">
+      <div class="panel">
+        <div class="panel-head">
+          <h3>Registered voters</h3>
+          <input type="text" id="voterSearch" class="mini-input" placeholder="Search name / phone…">
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Name</th><th>Phone</th><th>Email</th>
+              <th class="num">Payments</th><th class="num">Votes cast</th>
+              <th class="num">Spent</th><th>Joined</th>
+            </tr></thead>
+            <tbody id="voterBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- MANAGE NOMINEES / BONUS -->
+    <section class="view" data-view="manage" style="display:none;">
+      <div class="panel">
+        <div class="panel-head">
+          <h3>Boost / adjust nominee votes</h3>
+          <span class="panel-sub">Bonus votes are added on top of paid votes.</span>
+        </div>
+        <div class="manage-list" id="manageList"></div>
+      </div>
+
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-head"><h3>Add a nominee</h3></div>
+          <label class="field-label">Category</label>
+          <select id="newNomCat" class="field"></select>
+          <label class="field-label" style="margin-top:10px;">Nominee name</label>
+          <input id="newNomName" class="field" placeholder="Full name">
+          <label class="field-label" style="margin-top:10px;">Detail (optional)</label>
+          <input id="newNomDetail" class="field" placeholder="School / role / location">
+          <button class="primary-btn" id="addNomBtn" style="margin-top:14px;">Add nominee</button>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Add a category</h3></div>
+          <label class="field-label">Category name</label>
+          <input id="newCatName" class="field" placeholder="e.g. Best Fashion Designer">
+          <button class="primary-btn" id="addCatBtn" style="margin-top:14px;">Add category</button>
+          <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--line);">
+            <div class="danger-note">Danger zone</div>
+            <button class="danger-btn" id="resetBtn">Reset ALL votes & transactions</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- LOG -->
+    <section class="view" data-view="log" style="display:none;">
+      <div class="panel">
+        <div class="panel-head"><h3>Admin activity log</h3><span class="panel-sub">Last 100 actions</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Action</th><th>Detail</th><th>Time</th></tr></thead>
+            <tbody id="logBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- BONUS MODAL -->
+<div class="overlay" id="bonusOverlay">
+  <div class="modal">
+    <button class="modal-close" id="bonusClose">✕</button>
+    <div class="modal-eyebrow">Adjust votes</div>
+    <div class="modal-title" id="bonusTitle">Nominee</div>
+    <div class="modal-sub" id="bonusSub">Add bonus votes on top of paid votes.</div>
+    <div class="bonus-current">
+      <div><span class="bc-lbl">Paid votes</span><span class="bc-val" id="bcPaid">0</span></div>
+      <div><span class="bc-lbl">Current bonus</span><span class="bc-val" id="bcBonus">0</span></div>
+      <div><span class="bc-lbl">Total shown</span><span class="bc-val" id="bcTotal">0</span></div>
+    </div>
+    <label class="field-label" style="margin-top:14px;">Add bonus votes (positive or negative)</label>
+    <input type="number" id="bonusDelta" class="field" placeholder="e.g. 50 or -10">
+    <div class="quick-row">
+      <button class="mini-btn" data-d="10">+10</button>
+      <button class="mini-btn" data-d="50">+50</button>
+      <button class="mini-btn" data-d="100">+100</button>
+      <button class="mini-btn" data-d="500">+500</button>
+      <button class="mini-btn" data-d="1000">+1000</button>
+    </div>
+    <label class="field-label" style="margin-top:14px;">…or set bonus to exact number</label>
+    <input type="number" id="bonusSet" class="field" placeholder="Exact bonus value">
+    <button class="primary-btn" id="bonusApply" style="margin-top:16px;">Apply</button>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="/assets/admin.js"></script>
+</body>
+</html>

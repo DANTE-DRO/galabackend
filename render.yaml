@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: gala-awards-backend
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
+        value: gala2026
+      - key: MPESA_MODE
+        value: simulation
+      - key: VOTE_COST_KES
+        value: "10"
+      - key: CORS_ORIGIN
+        value: "*"
+    disk:
+      name: gala-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
