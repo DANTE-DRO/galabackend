@@ -65,99 +65,61 @@ CREATE INDEX IF NOT EXISTS idx_tx_created ON transactions(created_at);
 CREATE INDEX IF NOT EXISTS idx_nom_cat ON nominees(category_id);
 `);
 
+// Backward-compatible schema migration for existing Render disks.
+const txColumns = db.prepare('PRAGMA table_info(transactions)').all().map(c => c.name);
+if (!txColumns.includes('device_id')) db.exec('ALTER TABLE transactions ADD COLUMN device_id TEXT');
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_success_device_vote ON transactions(device_id) WHERE status = 'success' AND device_id IS NOT NULL");
+
 // ---- Seed default data on first run ----
 const catCount = db.prepare('SELECT COUNT(*) AS n FROM categories').get().n;
 if (catCount === 0) {
   const seed = [
-    { id: 'mc', title: 'Best MC of the Year', nominees: [
-      ['MC Kirinyaga', 'Radio & Events'],
-      ['MC Wanjiru', 'Corporate Host'],
-      ['MC Mwangi', 'Weddings Specialist'],
-      ['MC Njoroge', 'Comedy MC'],
-    ]},
-    { id: 'dj', title: 'Best DJ of the Year', nominees: [
-      ['DJ Karim', 'Club Circuit'],
-      ['DJ Lyta Kenya', 'Radio Mix'],
-      ['DJ Muriuki', 'Weddings & Corporate'],
-      ['DJ Wa Mumbi', 'Gospel Sets'],
+    { id: 'mc', title: 'Best MC', nominees: [
+      ['MC Alex Mwaniki', ''], ['MC Chapo', ''], ['MC Mike On The Mic', ''],
+      ['MC Chape Chape', ''], ['MC Frank Manga', ''], ['MC Hype Mash', ''],
     ]},
     { id: 'photographer', title: 'Best Photographer', nominees: [
-      ['Kimani Studios', 'Weddings'],
-      ['Njeri Frames', 'Portraits'],
-      ['Focus Kirinyaga', 'Events'],
-      ['Highland Lens', 'Landscape'],
+      ['Drip Art', ''], ['Kingde', ''], ['Lemmy Photography', ''], ['Trimpix', ''], ['Gabi Shoots', ''],
+      ['Joe Media', ''], ['Spencer Photography', ''], ['RS Photography', ''], ['Jimtech Studio', ''], ['Manu Photography', ''],
     ]},
-    { id: 'videographer', title: 'Best Videographer', nominees: [
-      ['Cinema Kirinyaga', 'Documentary'],
-      ['Wangari Films', 'Weddings'],
-      ['Mt Kenya Motion', 'Music Videos'],
-      ['Aerial 254', 'Drone Cinematography'],
+    { id: 'club-mc', title: 'Best Club MC', nominees: [
+      ['MC Mtapelli', ''], ['MC Jones', ''], ['MC Dagi', ''], ['MC Trizy', ''],
     ]},
-    { id: 'artist', title: 'Best Musical Artist', nominees: [
-      ['Kevo Wa Mumbi', 'Mugithi'],
-      ['Sister Wanjiku', 'Gospel'],
-      ['Young Kirinyaga', 'Afrobeat'],
-      ['Mama Nyawira', 'Traditional'],
+    { id: 'dj', title: 'Best DJ', nominees: [
+      ['DJ Springdee', ''], ['DJ A', ''], ['DJ B', ''], ['DJ C', ''], ['DJ D', ''],
     ]},
-    { id: 'teacher', title: 'Teacher of the Year', nominees: [
-      ['Mr. Kariuki', 'Kerugoya Boys'],
-      ['Madam Wangari', 'Kianyaga Girls'],
-      ['Mr. Mutugi', 'Baricho High'],
-      ['Madam Njoki', 'Kutus Primary'],
+    { id: 'teacher', title: 'Best Teacher', nominees: [
+      ['Mr Njogu', 'Kavote Secondary School'], ['Mr Josphat Wamae', 'Multiple Comprehensive'], ['Mr Munene', 'Kiaga'],
+      ['Mr Alex Gakuru', 'Kianyaga Boys'], ['Tr Emily', 'Kabare Girls'], ['Mr Gitahi', 'Kamwiru Boys'],
+      ['Tr Sharon', 'Karimaini Junior School'], ['Mr Kariuki', 'Ngurubani Junior School'], ['Mr Njanja', 'Baricho Boys'], ['Tr Lucy', 'Kiaragana Girls'],
     ]},
-    { id: 'school', title: 'School of the Year', nominees: [
-      ['Kerugoya Boys High School', 'Secondary'],
-      ['Kianyaga Girls', 'Secondary'],
-      ['Baricho Boys', 'Secondary'],
-      ['Mutira Girls', 'Secondary'],
+    { id: 'private-school', title: 'Best Private School', nominees: [
+      ['Multiple Comprehensive School', ''], ['Kerugoya Municipality', ''], ['Kerugoya Goodshepherd', ''], ['Jufred Comprehensive School', ''],
+      ['Alber School Kutus', ''], ['Kerugoya PCEA Academy', ''], ['Kutus Municipality Comprehensive School', ''],
     ]},
-    { id: 'leader', title: 'Community Leader of the Year', nominees: [
-      ['Hon. Waiguru', 'Governor'],
-      ['Hon. Wachira', 'MP'],
-      ['Bishop Muriuki', 'Faith Leader'],
-      ['Mama Njeri', 'Community Elder'],
+    { id: 'leader-kirinyaga', title: 'Most Popular Leader — Kirinyaga', nominees: [
+      ['Gachoki Gitari', ''], ['Hon Kawangui', ''], ['Edward Chomba', ''], ['Wakili Wambugu', ''],
     ]},
-    { id: 'entrepreneur', title: 'Entrepreneur of the Year', nominees: [
-      ['Kirinyaga Coffee Co.', 'Agribusiness'],
-      ['Highland Motors', 'Automotive'],
-      ['Njeri Fashion House', 'Retail'],
-      ['Mt Kenya Foods', 'Manufacturing'],
+    { id: 'leader-ndia', title: 'Most Popular Leader — Ndia', nominees: [
+      ['GK Kariuki', 'GK'], ['Jedidah Waguthii Muchoki', ''], ['Christopher Muriithi', ''], ['Muteti Murimi', ''],
     ]},
-    { id: 'restaurant', title: 'Best Restaurant', nominees: [
-      ['Kerugoya Grill', 'Casual Dining'],
-      ['Highland Bites', 'African Cuisine'],
-      ['Kutus Kitchen', 'Family Restaurant'],
-      ['Baricho Bistro', 'Fine Dining'],
+    { id: 'leader-gichugu', title: 'Most Popular Leader — Gichugu', nominees: [
+      ['Gichimu Githinji', ''], ['Njogu Barua', ''], ['Michael Muchiri', ''], ['Justus Munene', ''], ['Njomo Muchira', ''], ['Faith Wakio', ''], ['Njeri Mbogo', ''],
     ]},
-    { id: 'salon', title: 'Best Beauty Salon', nominees: [
-      ['Njeri Beauty Lounge', 'Bridal'],
-      ['Highland Hair', 'Braiding'],
-      ['Glam Kirinyaga', 'Nails & Lashes'],
-      ['Wanjiru Spa', 'Full Service'],
+    { id: 'leader-mwea', title: 'Most Popular Leader — Mwea', nominees: [
+      ['Kabinga wa Thaayu', ''], ['Wangeci Warui', ''], ['Mary Maingi', ''], ['Ken Daktari', ''], ['Jinaro Njamumo', ''],
     ]},
-    { id: 'boutique', title: 'Best Fashion Boutique', nominees: [
-      ['Kirinyaga Threads', 'Casual Wear'],
-      ['Njeri Couture', 'Bridal'],
-      ['Highland Fits', 'Menswear'],
-      ['Mama Wanjiku Fabrics', 'Traditional'],
+    { id: 'kirinyaga-kingpin', title: 'Kirinyaga Kingpin', nominees: [
+      ['Hon Kamau Murango', ''], ['Hon Martha Karua', ''], ['Hon Ann Waiguru', ''], ['Hon GK Kariuki', ''], ['Karanja Kibicho', ''],
     ]},
-    { id: 'gym', title: 'Best Gym / Fitness Coach', nominees: [
-      ['Peak Kirinyaga Gym', 'Full Gym'],
-      ['Coach Mwangi', 'Personal Trainer'],
-      ['Highland Fit Club', 'Group Classes'],
-      ['Warrior Fitness', 'Boxing'],
+    { id: 'mt-kenya-kingpin', title: 'Mt Kenya Kingpin', nominees: [
+      ['H.E Prof Kithure Kindiki', ''], ['H.E Rigathi Gachagua', ''],
     ]},
-    { id: 'youth', title: 'Youth Group of the Year', nominees: [
-      ['Kirinyaga Youth SACCO', 'Finance'],
-      ['Highland Green Warriors', 'Environment'],
-      ['Kutus Rising', 'Empowerment'],
-      ['Baricho Talents', 'Arts'],
+    { id: 'tertiary', title: 'Best Tertiary Institution', nominees: [
+      ['Ndia Technical', ''], ['Kiharu Technical College', ''], ['Mathenge Institute', ''],
     ]},
-    { id: 'nurse', title: 'Nurse of the Year', nominees: [
-      ['Sister Wangui', 'Kerugoya County Hospital'],
-      ['Nurse Mwangi', 'Kianyaga Sub-County'],
-      ['Sister Nyawira', 'Kimbimbi Hospital'],
-      ['Nurse Muthoni', 'Kutus Health Centre'],
+    { id: 'karaoke-host', title: 'Best Karaoke Host', nominees: [
+      ['Liz Beib', ''], ['MC Sophie Ka Wairimu', ''], ['Miss Lady Carol', ''], ['Jackie', 'Sandra Ithaga Riene'], ['MC Vee', ''],
     ]},
   ];
 
