@@ -57,9 +57,11 @@ CREATE TABLE IF NOT EXISTS transactions (
 );
 
 CREATE TABLE IF NOT EXISTS device_votes (
-  device_id TEXT PRIMARY KEY,
+  device_id TEXT NOT NULL,
+  category_id TEXT NOT NULL,
   nominee_id TEXT,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (device_id, category_id)
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -80,8 +82,38 @@ try {
   }
 } catch (e) { /* ignore */ }
 
+// ---- Migration: device_votes now keyed by (device_id, category_id) so a device can vote once PER CATEGORY ----
+try {
+  const dvCols = db.prepare(`PRAGMA table_info(device_votes)`).all();
+  const hasCategory = dvCols.some(c => c.name === 'category_id');
+  if (dvCols.length > 0 && !hasCategory) {
+    // Old schema had device_id as PRIMARY KEY. Rebuild the table.
+    db.exec(`
+      BEGIN;
+      CREATE TABLE device_votes_new (
+        device_id TEXT NOT NULL,
+        category_id TEXT NOT NULL,
+        nominee_id TEXT,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (device_id, category_id)
+      );
+      INSERT INTO device_votes_new (device_id, category_id, nominee_id, created_at)
+        SELECT dv.device_id,
+               COALESCE(n.category_id, 'legacy') AS category_id,
+               dv.nominee_id,
+               dv.created_at
+        FROM device_votes dv
+        LEFT JOIN nominees n ON n.id = dv.nominee_id;
+      DROP TABLE device_votes;
+      ALTER TABLE device_votes_new RENAME TO device_votes;
+      COMMIT;
+    `);
+    console.log('[db] Migrated device_votes to per-category schema.');
+  }
+} catch (e) { console.error('[db] device_votes migration error:', e); }
+
 // ---- Seed data (Kirinyaga Gala Awards — from Gala awards.html, "Best Barber Shop" excluded) ----
-const SEED_VERSION = 'v2-2026-kirinyaga';
+const SEED_VERSION = 'v3-2026-kirinyaga-central';
 
 const seedCategories = [
   { id: 'best-mc', title: 'Best MC', nominees: [
@@ -112,10 +144,10 @@ const seedCategories = [
   ]},
   { id: 'best-dj', title: 'Best DJ', nominees: [
     ['DJ Springdee', ''],
-    ['DJ A', ''],
-    ['DJ B', ''],
-    ['DJ C', ''],
-    ['DJ D', ''],
+    ['Temu Awoo', ''],
+    ['The Influencer', ''],
+    ['Justin Kinyua', ''],
+    ['Kirinyaga Superstars', ''],
   ]},
   { id: 'best-teacher', title: 'Best Teacher', nominees: [
     ['Mr Njogu', 'Kavote Secondary School'],
@@ -138,7 +170,7 @@ const seedCategories = [
     ['Kerugoya PCEA Academy', ''],
     ['Kutus Municipality Comprehensive School', ''],
   ]},
-  { id: 'leader-kirinyaga', title: 'Most Popular Leader — Kirinyaga', nominees: [
+  { id: 'leader-kirinyaga', title: 'Most Popular Leader — Kirinyaga Central', nominees: [
     ['Gachoki Gitari', ''],
     ['Hon Kawangui', ''],
     ['Edward Chomba', ''],

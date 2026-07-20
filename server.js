@@ -140,13 +140,13 @@ app.get('/api/auth/me', auth, (req, res) => {
   res.json({ user: u });
 });
 
-// ---- Voting: check if device already voted ----
+// ---- Voting: check which categories this device has already voted in ----
 app.get('/api/vote/check', (req, res) => {
   const deviceId = String(req.query.deviceId || '').trim();
-  if (!deviceId) return res.json({ voted: false });
-  const row = db.prepare('SELECT device_id, nominee_id, created_at FROM device_votes WHERE device_id = ?').get(deviceId);
-  if (row) return res.json({ voted: true, nomineeId: row.nominee_id, at: row.created_at });
-  res.json({ voted: false });
+  if (!deviceId) return res.json({ voted: false, votedCategories: [] });
+  const rows = db.prepare('SELECT category_id, nominee_id, created_at FROM device_votes WHERE device_id = ?').all(deviceId);
+  const votedCategories = rows.map(r => ({ categoryId: r.category_id, nomineeId: r.nominee_id, at: r.created_at }));
+  res.json({ voted: votedCategories.length > 0, votedCategories });
 });
 
 // ---- Voting: initiate STK push (no auth — one vote per device) ----
@@ -160,17 +160,19 @@ app.post('/api/vote/initiate', async (req, res) => {
     return res.status(400).json({ error: 'invalid_amount', hint: `Amount must be a multiple of ${VOTE_PRICE}` });
   }
 
-  const nominee = db.prepare('SELECT id, name FROM nominees WHERE id = ?').get(nomineeId);
+  const nominee = db.prepare('SELECT id, name, category_id FROM nominees WHERE id = ?').get(nomineeId);
   if (!nominee) return res.status(404).json({ error: 'nominee_not_found' });
 
-  // Enforce one-vote-per-device
-  const already = db.prepare('SELECT device_id FROM device_votes WHERE device_id = ?').get(deviceId);
-  if (already) return res.status(409).json({ error: 'already_voted', message: 'You have already voted from this device.' });
+  // Enforce one-vote-per-device-PER-CATEGORY (a device can still vote in other categories)
+  const already = db.prepare('SELECT category_id FROM device_votes WHERE device_id = ? AND category_id = ?')
+    .get(deviceId, nominee.category_id);
+  if (already) return res.status(409).json({ error: 'already_voted_category', message: 'You have already voted in this category from this device. You can still vote in other categories.' });
 
   const p = normalisePhone(phone);
   if (!isValidKenyanPhone(p)) return res.status(400).json({ error: 'invalid_phone' });
 
-  const votes = Math.floor(amt / VOTE_PRICE);
+  // 1 vote per category, regardless of amount paid (min VOTE_PRICE required)
+  const votes = 1;
 
   try {
     const stk = await stkPush({
@@ -222,20 +224,23 @@ app.post('/api/vote/simulate-confirm', (req, res) => {
       .run(tx.votes, tx.nominee_id);
     // Lock this device — one vote per device
     if (tx.device_id) {
-      db.prepare(`INSERT OR IGNORE INTO device_votes (device_id, nominee_id, created_at) VALUES (?, ?, ?)`)
-        .run(tx.device_id, tx.nominee_id, Date.now());
+      const nom = db.prepare('SELECT category_id FROM nominees WHERE id = ?').get(tx.nominee_id);
+      if (nom) {
+        db.prepare(`INSERT OR IGNORE INTO device_votes (device_id, category_id, nominee_id, created_at) VALUES (?, ?, ?, ?)`)
+          .run(tx.device_id, nom.category_id, tx.nominee_id, Date.now());
+      }
     }
   });
   update();
 
-  const nominee = db.prepare('SELECT id, name, base_votes, paid_votes FROM nominees WHERE id = ?').get(tx.nominee_id);
+  const nominee = db.prepare('SELECT id, name, category_id, base_votes, paid_votes FROM nominees WHERE id = ?').get(tx.nominee_id);
   res.json({
     ok: true,
     status: 'success',
     receipt,
     votes: tx.votes,
     amount: tx.amount,
-    nominee: { id: nominee.id, name: nominee.name, votes: nominee.base_votes + nominee.paid_votes },
+    nominee: { id: nominee.id, name: nominee.name, categoryId: nominee.category_id, votes: nominee.base_votes + nominee.paid_votes },
   });
 });
 
@@ -274,8 +279,11 @@ app.post('/api/mpesa/callback', (req, res) => {
         db.prepare(`UPDATE nominees SET paid_votes = paid_votes + ? WHERE id = ?`)
           .run(tx.votes, tx.nominee_id);
         if (tx.device_id) {
-          db.prepare(`INSERT OR IGNORE INTO device_votes (device_id, nominee_id, created_at) VALUES (?, ?, ?)`)
-            .run(tx.device_id, tx.nominee_id, Date.now());
+          const nom = db.prepare('SELECT category_id FROM nominees WHERE id = ?').get(tx.nominee_id);
+          if (nom) {
+            db.prepare(`INSERT OR IGNORE INTO device_votes (device_id, category_id, nominee_id, created_at) VALUES (?, ?, ?, ?)`)
+              .run(tx.device_id, nom.category_id, tx.nominee_id, Date.now());
+          }
         }
       });
       update();
