@@ -161,7 +161,7 @@ const seedCategories = [
     ['Tr Emily', 'Kabare Girls'],
     ['Mr Gitahi', 'Kamwiru Boys'],
     ['Tr Sharon', 'Karimaini Junior School'],
-    ['Mr Kariuki (Determined)', ''],
+    ['Mr Kariuki', '(Determined)'],
     ['Mr Njanja', 'Baricho Boys'],
     ['Tr Lucy', 'Kiaragana Girls'],
   ]},
