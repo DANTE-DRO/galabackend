@@ -113,7 +113,7 @@ try {
 } catch (e) { console.error('[db] device_votes migration error:', e); }
 
 // ---- Seed data (Kirinyaga Gala Awards — from Gala awards.html, "Best Barber Shop" excluded) ----
-const SEED_VERSION = 'v4-2026-kirinyaga-galla';
+const SEED_VERSION = 'v5-2026-kirinyaga-galla';
 
 const seedCategories = [
   { id: 'best-mc', title: 'Best MC', nominees: [
@@ -161,7 +161,7 @@ const seedCategories = [
     ['Tr Emily', 'Kabare Girls'],
     ['Mr Gitahi', 'Kamwiru Boys'],
     ['Tr Sharon', 'Karimaini Junior School'],
-    ['Mr Kariuki', '(Determined)'],
+    ['Mr Kariuki (Determined)', 'Ngurubani Secondary'],
     ['Mr Njanja', 'Baricho Boys'],
     ['Tr Lucy', 'Kiaragana Girls'],
   ]},

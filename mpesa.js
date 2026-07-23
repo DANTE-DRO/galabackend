@@ -4,14 +4,17 @@
 
 const { v4: uuid } = require('uuid');
 
-const KCB_BASE_URL = process.env.KCB_BASE_URL || 'https://accounts.buni.kcbgroup.com';
+const KCB_ENV = (process.env.KCB_ENV || 'production').toLowerCase();
+const KCB_BASE_URL = process.env.KCB_BASE_URL || (KCB_ENV === 'production' ? 'https://api.buni.kcbgroup.com' : 'https://accounts.buni.kcbgroup.com');
+const KCB_TOKEN_ENDPOINT = process.env.KCB_TOKEN_ENDPOINT || `${KCB_BASE_URL.replace(/\/$/, '')}/token`;
 const KCB_CONSUMER_KEY = process.env.KCB_CONSUMER_KEY || process.env.MPESA_CONSUMER_KEY || '';
 const KCB_CONSUMER_SECRET = process.env.KCB_CONSUMER_SECRET || process.env.MPESA_CONSUMER_SECRET || '';
 const KCB_API_KEY = process.env.KCB_API_KEY || '';
 const KCB_CALLBACK_URL = process.env.KCB_CALLBACK_URL || process.env.MPESA_CALLBACK_URL || 'https://www.galaaward.co.ke/callback';
 const KCB_SHORTCODE = process.env.KCB_SHORTCODE || process.env.MPESA_SHORTCODE || '';
 const KCB_TILL = process.env.KCB_TILL || KCB_SHORTCODE;
-const MODE = (process.env.MPESA_MODE || 'sandbox').toLowerCase();
+const KCB_STK_ENDPOINT = process.env.KCB_STK_ENDPOINT || `${KCB_BASE_URL.replace(/\/$/, '')}/mpesa/stkpush/v1/processrequest`;
+const MODE = (process.env.MPESA_MODE || (KCB_ENV === 'production' ? 'live' : 'sandbox')).toLowerCase();
 
 // In-memory state for pending simulated transactions (sandbox mode only)
 const pending = new Map();
@@ -32,7 +35,7 @@ async function getAccessToken() {
   }
 
   const creds = Buffer.from(`${KCB_CONSUMER_KEY}:${KCB_CONSUMER_SECRET}`).toString('base64');
-  const url = `${KCB_BASE_URL.replace(/\/$/, '')}/oauth2/token`;
+  const url = KCB_TOKEN_ENDPOINT;
 
   const body = new URLSearchParams({ grant_type: 'client_credentials' });
 
@@ -87,7 +90,7 @@ async function stkPush({ phone, amount, accountRef, description }) {
   try {
     const token = await getAccessToken();
     // KCB Buni STK Push endpoint. Payload mirrors Safaricom / KCB Buni Mpesa "STKPush" contract.
-    const url = `${KCB_BASE_URL.replace(/\/$/, '')}/mm/stkpush/v1/processrequest`;
+    const url = KCB_STK_ENDPOINT;
 
     const payload = {
       BusinessShortCode: KCB_SHORTCODE || '174379',
