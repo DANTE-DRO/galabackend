@@ -149,30 +149,27 @@ app.get('/api/vote/check', (req, res) => {
   res.json({ voted: votedCategories.length > 0, votedCategories });
 });
 
-// ---- Voting: initiate STK push (no auth — one vote per device) ----
+// ---- Voting: initiate STK push (no auth, unlimited votes; amount determines vote count) ----
 app.post('/api/vote/initiate', async (req, res) => {
   const { nomineeId, amount, phone, deviceId } = req.body || {};
   if (!nomineeId || !amount) return res.status(400).json({ error: 'missing_fields' });
-  if (!deviceId || String(deviceId).length < 8) return res.status(400).json({ error: 'missing_device' });
 
   const amt = parseInt(amount, 10);
-  if (!Number.isFinite(amt) || amt < VOTE_PRICE || amt % VOTE_PRICE !== 0) {
-    return res.status(400).json({ error: 'invalid_amount', hint: `Amount must be a multiple of ${VOTE_PRICE}` });
+  // Accept KES 10 up to KES 1000, in multiples of the vote price (KES 10).
+  const MAX_AMOUNT = 1000;
+  if (!Number.isFinite(amt) || amt < VOTE_PRICE || amt % VOTE_PRICE !== 0 || amt > MAX_AMOUNT) {
+    return res.status(400).json({ error: 'invalid_amount', hint: `Amount must be a multiple of ${VOTE_PRICE} (min ${VOTE_PRICE}, max ${MAX_AMOUNT})` });
   }
 
   const nominee = db.prepare('SELECT id, name, category_id FROM nominees WHERE id = ?').get(nomineeId);
   if (!nominee) return res.status(404).json({ error: 'nominee_not_found' });
 
-  // Enforce one-vote-per-device-PER-CATEGORY (a device can still vote in other categories)
-  const already = db.prepare('SELECT category_id FROM device_votes WHERE device_id = ? AND category_id = ?')
-    .get(deviceId, nominee.category_id);
-  if (already) return res.status(409).json({ error: 'already_voted_category', message: 'You have already voted in this category from this device. You can still vote in other categories.' });
-
+  // Voting is unrestricted — a voter may vote as many times as they wish,
+  // in any category, from any device. Each KES 10 paid = 1 vote.
   const p = normalisePhone(phone);
   if (!isValidKenyanPhone(p)) return res.status(400).json({ error: 'invalid_phone' });
 
-  // 1 vote per category, regardless of amount paid (min VOTE_PRICE required)
-  const votes = 1;
+  const votes = Math.floor(amt / VOTE_PRICE);
 
   try {
     const stk = await stkPush({
@@ -186,7 +183,7 @@ app.post('/api/vote/initiate', async (req, res) => {
     db.prepare(`INSERT INTO transactions
       (id, checkout_id, user_id, device_id, nominee_id, phone, amount, votes, status, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
-      .run(txId, stk.CheckoutRequestID, null, deviceId, nominee.id, p, amt, votes, Date.now());
+      .run(txId, stk.CheckoutRequestID, null, deviceId || null, nominee.id, p, amt, votes, Date.now());
 
     res.json({
       ok: true,
@@ -229,14 +226,7 @@ app.post('/api/vote/simulate-confirm', (req, res) => {
       .run(receipt, Date.now(), tx.id);
     db.prepare(`UPDATE nominees SET paid_votes = paid_votes + ? WHERE id = ?`)
       .run(tx.votes, tx.nominee_id);
-    // Lock this device — one vote per device
-    if (tx.device_id) {
-      const nom = db.prepare('SELECT category_id FROM nominees WHERE id = ?').get(tx.nominee_id);
-      if (nom) {
-        db.prepare(`INSERT OR IGNORE INTO device_votes (device_id, category_id, nominee_id, created_at) VALUES (?, ?, ?, ?)`)
-          .run(tx.device_id, nom.category_id, tx.nominee_id, Date.now());
-      }
-    }
+    // Unlimited voting — no device lock is written.
   });
   update();
 
@@ -258,13 +248,7 @@ function finaliseSuccess(tx, receipt) {
       .run(receipt, Date.now(), tx.id);
     db.prepare(`UPDATE nominees SET paid_votes = paid_votes + ? WHERE id = ?`)
       .run(tx.votes, tx.nominee_id);
-    if (tx.device_id) {
-      const nom = db.prepare('SELECT category_id FROM nominees WHERE id = ?').get(tx.nominee_id);
-      if (nom) {
-        db.prepare(`INSERT OR IGNORE INTO device_votes (device_id, category_id, nominee_id, created_at) VALUES (?, ?, ?, ?)`)
-          .run(tx.device_id, nom.category_id, tx.nominee_id, Date.now());
-      }
-    }
+    // Unlimited voting — no per-device / per-category lock is recorded.
   });
   update();
 }
