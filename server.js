@@ -11,7 +11,7 @@ const path = require('path');
 const { v4: uuid } = require('uuid');
 
 const db = require('./db');
-const { stkPush, simulateConfirm } = require('./mpesa');
+const { stkPush, simulateConfirm, queryStkStatus, MODE: MPESA_MODE } = require('./mpesa');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -195,7 +195,9 @@ app.post('/api/vote/initiate', async (req, res) => {
       votes,
       amount: amt,
       phone: p,
-      message: 'STK push sent. Enter your M-Pesa PIN to complete.',
+      simulated: !!stk._simulated,
+      mode: MPESA_MODE,
+      message: 'STK push sent. Enter your M-Pesa PIN on your phone to complete.',
     });
   } catch (err) {
     console.error('STK error:', err);
@@ -205,6 +207,11 @@ app.post('/api/vote/initiate', async (req, res) => {
 
 // ---- Simulated PIN confirmation (used only in sandbox mode) ----
 app.post('/api/vote/simulate-confirm', (req, res) => {
+  // Hard-disable in live mode: real confirmation must come from the KCB callback.
+  if (MPESA_MODE !== 'sandbox') {
+    return res.status(403).json({ error: 'simulation_disabled', message: 'Simulation is disabled in live mode.' });
+  }
+
   const { checkoutId, pin } = req.body || {};
   if (!checkoutId) return res.status(400).json({ error: 'missing_checkout' });
   if (!pin || String(pin).length !== 4) return res.status(400).json({ error: 'invalid_pin' });
@@ -244,10 +251,72 @@ app.post('/api/vote/simulate-confirm', (req, res) => {
   });
 });
 
+// ---- Finalise a successful transaction (used by both callback + polling) ----
+function finaliseSuccess(tx, receipt) {
+  const update = db.transaction(() => {
+    db.prepare(`UPDATE transactions SET status='success', mpesa_receipt=?, completed_at=? WHERE id=?`)
+      .run(receipt, Date.now(), tx.id);
+    db.prepare(`UPDATE nominees SET paid_votes = paid_votes + ? WHERE id = ?`)
+      .run(tx.votes, tx.nominee_id);
+    if (tx.device_id) {
+      const nom = db.prepare('SELECT category_id FROM nominees WHERE id = ?').get(tx.nominee_id);
+      if (nom) {
+        db.prepare(`INSERT OR IGNORE INTO device_votes (device_id, category_id, nominee_id, created_at) VALUES (?, ?, ?, ?)`)
+          .run(tx.device_id, nom.category_id, tx.nominee_id, Date.now());
+      }
+    }
+  });
+  update();
+}
+
+function finaliseFailure(tx) {
+  db.prepare(`UPDATE transactions SET status='failed', completed_at=? WHERE id=?`).run(Date.now(), tx.id);
+}
+
 // ---- Poll transaction status ----
-app.get('/api/vote/status/:checkoutId', (req, res) => {
+// If still pending and we're in live mode, actively query KCB to detect user
+// cancellation / failure / timeout, so a cancelled push doesn't sit forever.
+app.get('/api/vote/status/:checkoutId', async (req, res) => {
   const tx = db.prepare('SELECT * FROM transactions WHERE checkout_id = ?').get(req.params.checkoutId);
   if (!tx) return res.status(404).json({ error: 'not_found' });
+
+  // If still pending, ask KCB directly.
+  if (tx.status === 'pending' && MPESA_MODE !== 'sandbox') {
+    try {
+      const q = await queryStkStatus(tx.checkout_id);
+      if (q.resultCode === 0) {
+        const receipt = q.receipt || ('MP' + Date.now().toString(36).toUpperCase());
+        finaliseSuccess(tx, receipt);
+        const fresh = db.prepare('SELECT * FROM transactions WHERE id = ?').get(tx.id);
+        return res.json({
+          status: fresh.status, votes: fresh.votes, amount: fresh.amount,
+          receipt: fresh.mpesa_receipt, completed_at: fresh.completed_at,
+        });
+      } else if (q.resultCode !== null && q.resultCode !== 0) {
+        // Any non-zero result = failed / cancelled / timeout. Do NOT count as a vote.
+        finaliseFailure(tx);
+        const fresh = db.prepare('SELECT * FROM transactions WHERE id = ?').get(tx.id);
+        return res.json({
+          status: fresh.status, votes: fresh.votes, amount: fresh.amount,
+          receipt: null, completed_at: fresh.completed_at,
+          resultCode: q.resultCode, resultDesc: q.resultDesc,
+        });
+      }
+      // resultCode null → still pending on KCB side; fall through.
+    } catch (e) { /* silent — return pending */ }
+
+    // Safety: auto-fail transactions older than 2 minutes that never got a callback.
+    if (Date.now() - tx.created_at > 2 * 60 * 1000) {
+      finaliseFailure(tx);
+      const fresh = db.prepare('SELECT * FROM transactions WHERE id = ?').get(tx.id);
+      return res.json({
+        status: fresh.status, votes: fresh.votes, amount: fresh.amount,
+        receipt: null, completed_at: fresh.completed_at,
+        resultDesc: 'timeout',
+      });
+    }
+  }
+
   res.json({
     status: tx.status,
     votes: tx.votes,
@@ -274,22 +343,11 @@ function handleMpesaCallback(req, res) {
       const items = stk.CallbackMetadata?.Item || [];
       const receiptItem = items.find(i => i.Name === 'MpesaReceiptNumber');
       const receipt = receiptItem?.Value || ('MP' + Date.now().toString(36).toUpperCase());
-      const update = db.transaction(() => {
-        db.prepare(`UPDATE transactions SET status='success', mpesa_receipt=?, completed_at=? WHERE id=?`)
-          .run(receipt, Date.now(), tx.id);
-        db.prepare(`UPDATE nominees SET paid_votes = paid_votes + ? WHERE id = ?`)
-          .run(tx.votes, tx.nominee_id);
-        if (tx.device_id) {
-          const nom = db.prepare('SELECT category_id FROM nominees WHERE id = ?').get(tx.nominee_id);
-          if (nom) {
-            db.prepare(`INSERT OR IGNORE INTO device_votes (device_id, category_id, nominee_id, created_at) VALUES (?, ?, ?, ?)`)
-              .run(tx.device_id, nom.category_id, tx.nominee_id, Date.now());
-          }
-        }
-      });
-      update();
+      finaliseSuccess(tx, receipt);
     } else {
-      db.prepare(`UPDATE transactions SET status='failed', completed_at=? WHERE id=?`).run(Date.now(), tx.id);
+      // Any non-zero ResultCode (1032 cancelled, 1037 timeout, insufficient funds, etc.)
+      // means the vote must NOT be counted.
+      finaliseFailure(tx);
     }
   } catch (e) {
     console.error('callback error', e);

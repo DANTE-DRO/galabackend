@@ -1,5 +1,5 @@
 // mpesa.js — KCB Buni M-Pesa STK Push integration
-// Uses KCB Buni API (https://accounts.buni.kcbgroup.com)
+// Uses KCB Buni API (https://api.buni.kcbgroup.com)
 // Falls back to a simulated flow when MPESA_MODE=sandbox and no live credentials are reachable.
 
 const { v4: uuid } = require('uuid');
@@ -13,7 +13,8 @@ const KCB_API_KEY = process.env.KCB_API_KEY || '';
 const KCB_CALLBACK_URL = process.env.KCB_CALLBACK_URL || process.env.MPESA_CALLBACK_URL || 'https://www.galaaward.co.ke/callback';
 const KCB_SHORTCODE = process.env.KCB_SHORTCODE || process.env.MPESA_SHORTCODE || '';
 const KCB_TILL = process.env.KCB_TILL || KCB_SHORTCODE;
-const KCB_STK_ENDPOINT = process.env.KCB_STK_ENDPOINT || `${KCB_BASE_URL.replace(/\/$/, '')}/mpesa/stkpush/v1/processrequest`;
+const KCB_STK_ENDPOINT = process.env.KCB_STK_ENDPOINT || `${KCB_BASE_URL.replace(/\/$/, '')}/mm/api/request/1.0.0/stkpush`;
+const KCB_QUERY_ENDPOINT = process.env.KCB_QUERY_ENDPOINT || `${KCB_BASE_URL.replace(/\/$/, '')}/mm/api/request/1.0.0/stkpushquery`;
 const MODE = (process.env.MPESA_MODE || (KCB_ENV === 'production' ? 'live' : 'sandbox')).toLowerCase();
 
 // In-memory state for pending simulated transactions (sandbox mode only)
@@ -25,7 +26,7 @@ let cachedTokenExpiresAt = 0;
 
 /**
  * Fetch (and cache) an OAuth access token from KCB Buni.
- * Buni exposes standard OAuth2 client-credentials at /oauth2/token.
+ * Buni exposes standard OAuth2 client-credentials at /token.
  */
 async function getAccessToken() {
   if (cachedToken && Date.now() < cachedTokenExpiresAt - 30_000) return cachedToken;
@@ -60,6 +61,25 @@ async function getAccessToken() {
 }
 
 /**
+ * Build the KCB Buni `invoiceNumber` field.
+ *
+ * Per KCB Buni support (email from Eddy Munene, API Integrations, Digital
+ * Financial Services): the invoice number must contain the KCB Till/Account
+ * number followed by the account reference, separated by a hash (#) or hyphen (-).
+ *
+ *     invoiceNumber = <TILL>#<ACCOUNT_REF>
+ *
+ * Example: "8112320#GALA4898E7"
+ */
+function buildInvoiceNumber(accountRef) {
+  const till = String(KCB_TILL || KCB_SHORTCODE || '').trim();
+  const ref = String(accountRef || 'GALA').replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'GALA';
+  // Cap total length at 20 chars to stay within KCB limits.
+  const combined = `${till}#${ref}`;
+  return combined.slice(0, 20);
+}
+
+/**
  * Trigger an STK push (customer receives a prompt on their phone).
  *
  * Real KCB Buni STK Push endpoint. If the call fails (network / credentials
@@ -89,16 +109,14 @@ async function stkPush({ phone, amount, accountRef, description }) {
 
   try {
     const token = await getAccessToken();
-    // KCB Buni STK Push endpoint. Payload mirrors Safaricom / KCB Buni Mpesa "STKPush" contract.
     const url = KCB_STK_ENDPOINT;
 
     // KCB Buni STK Push payload (production contract).
-    // Fields per KCB Buni API: phoneNumber, amount (string), invoiceNumber,
-    // sharedShortCode, orgShortCode, orgPassKey, callbackUrl, transactionDescription.
+    // NOTE: invoiceNumber must be "<TILL>#<ACCOUNT_REF>" per KCB support guidance.
     const payload = {
       phoneNumber: String(phone),
       amount: String(amount),
-      invoiceNumber: (accountRef || 'GALA').slice(0, 20),
+      invoiceNumber: buildInvoiceNumber(accountRef),
       sharedShortCode: false,
       orgShortCode: String(KCB_TILL || KCB_SHORTCODE || ''),
       orgPassKey: '',
@@ -145,7 +163,7 @@ async function stkPush({ phone, amount, accountRef, description }) {
       throw new Error('stk_push_failed');
     }
 
-    console.log(`[mpesa:kcb] STK push OK phone=${phone} amount=${amount} checkoutId=${merged.CheckoutRequestID}`);
+    console.log(`[mpesa:kcb] STK push OK phone=${phone} amount=${amount} invoice=${payload.invoiceNumber} checkoutId=${merged.CheckoutRequestID}`);
     // Track live push for callback matching; no auto-resolve.
     pending.set(merged.CheckoutRequestID, { phone, amount, at: Date.now(), live: true });
 
@@ -154,6 +172,52 @@ async function stkPush({ phone, amount, accountRef, description }) {
     console.error('[mpesa:kcb] error:', e.message);
     if (MODE === 'sandbox') return simulated();
     throw e;
+  }
+}
+
+/**
+ * Query the live status of an STK push by CheckoutRequestID.
+ * Returns a normalised object:
+ *   { resultCode, resultDesc, receipt, raw }
+ * resultCode: 0 = success, non-zero = failed/cancelled, null = still pending / unknown
+ */
+async function queryStkStatus(checkoutId) {
+  if (!checkoutId) return { resultCode: null, resultDesc: 'no_checkout', raw: null };
+  if (MODE === 'sandbox' || !KCB_CONSUMER_KEY || !KCB_CONSUMER_SECRET) {
+    return { resultCode: null, resultDesc: 'sandbox_mode', raw: null };
+  }
+  try {
+    const token = await getAccessToken();
+    const headers = {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    if (KCB_API_KEY) headers['apikey'] = KCB_API_KEY;
+
+    const payload = {
+      checkoutRequestID: checkoutId,
+      CheckoutRequestID: checkoutId,
+      orgShortCode: String(KCB_TILL || KCB_SHORTCODE || ''),
+    };
+
+    const resp = await fetch(KCB_QUERY_ENDPOINT, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    });
+    const text = await resp.text();
+    let body;
+    try { body = JSON.parse(text); } catch { body = { raw: text }; }
+
+    const inner = (body && body.response) || body || {};
+    const rc = inner.ResultCode ?? inner.resultCode ?? body.ResultCode ?? null;
+    const rd = inner.ResultDesc || inner.resultDesc || body.ResultDesc || '';
+    const rcp = inner.MpesaReceiptNumber || inner.mpesaReceiptNumber || null;
+    const resultCode = (rc === undefined || rc === null || rc === '') ? null : Number(rc);
+    return { resultCode, resultDesc: rd, receipt: rcp, raw: body };
+  } catch (e) {
+    return { resultCode: null, resultDesc: e.message, raw: null };
   }
 }
 
@@ -174,4 +238,4 @@ function simulateConfirm(checkoutId, success = true) {
   };
 }
 
-module.exports = { stkPush, simulateConfirm, getAccessToken };
+module.exports = { stkPush, simulateConfirm, queryStkStatus, getAccessToken, MODE };
