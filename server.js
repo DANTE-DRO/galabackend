@@ -258,7 +258,8 @@ app.get('/api/vote/status/:checkoutId', (req, res) => {
 });
 
 // ---- Real M-Pesa callback (kept for production) ----
-app.post('/api/mpesa/callback', (req, res) => {
+// Registered on BOTH /api/mpesa/callback (legacy) and /callback (matches KCB_CALLBACK_URL)
+function handleMpesaCallback(req, res) {
   console.log('[mpesa:callback]', JSON.stringify(req.body).slice(0, 500));
   try {
     const stk = req.body?.Body?.stkCallback;
@@ -294,7 +295,9 @@ app.post('/api/mpesa/callback', (req, res) => {
     console.error('callback error', e);
   }
   res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
-});
+}
+app.post('/api/mpesa/callback', handleMpesaCallback);
+app.post('/callback', handleMpesaCallback);
 
 // ---- Admin: login ----
 app.post('/api/admin/login', (req, res) => {
