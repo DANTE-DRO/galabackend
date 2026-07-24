@@ -92,16 +92,18 @@ async function stkPush({ phone, amount, accountRef, description }) {
     // KCB Buni STK Push endpoint. Payload mirrors Safaricom / KCB Buni Mpesa "STKPush" contract.
     const url = KCB_STK_ENDPOINT;
 
+    // KCB Buni STK Push payload (production contract).
+    // Fields per KCB Buni API: phoneNumber, amount (string), invoiceNumber,
+    // sharedShortCode, orgShortCode, orgPassKey, callbackUrl, transactionDescription.
     const payload = {
-      BusinessShortCode: KCB_SHORTCODE || '174379',
-      TransactionType: 'CustomerPayBillOnline',
-      Amount: amount,
-      PartyA: phone,
-      PartyB: KCB_TILL || KCB_SHORTCODE || '174379',
-      PhoneNumber: phone,
-      CallBackURL: KCB_CALLBACK_URL,
-      AccountReference: (accountRef || 'GALA').slice(0, 12),
-      TransactionDesc: (description || 'Gala vote').slice(0, 20),
+      phoneNumber: String(phone),
+      amount: String(amount),
+      invoiceNumber: (accountRef || 'GALA').slice(0, 20),
+      sharedShortCode: false,
+      orgShortCode: String(KCB_TILL || KCB_SHORTCODE || ''),
+      orgPassKey: '',
+      callbackUrl: KCB_CALLBACK_URL,
+      transactionDescription: (description || 'Gala vote').slice(0, 40),
     };
 
     const headers = {
@@ -121,23 +123,33 @@ async function stkPush({ phone, amount, accountRef, description }) {
     let body;
     try { body = JSON.parse(text); } catch { body = { raw: text }; }
 
-    if (!resp.ok || body.ResponseCode && body.ResponseCode !== '0') {
+    // KCB Buni returns either the Safaricom-style shape
+    //   { MerchantRequestID, CheckoutRequestID, ResponseCode, ResponseDescription, CustomerMessage }
+    // or the Buni-native shape
+    //   { header: { statusCode, statusDescription }, response: { MerchantRequestID, CheckoutRequestID, ... } }
+    // Normalise both.
+    const buniHeader = body && body.header;
+    const buniInner = (body && body.response) || {};
+    const merged = {
+      MerchantRequestID: body.MerchantRequestID || buniInner.MerchantRequestID,
+      CheckoutRequestID: body.CheckoutRequestID || buniInner.CheckoutRequestID,
+      ResponseCode: body.ResponseCode || buniInner.ResponseCode || (buniHeader && buniHeader.statusCode),
+      ResponseDescription: body.ResponseDescription || buniInner.ResponseDescription || (buniHeader && buniHeader.statusDescription),
+      CustomerMessage: body.CustomerMessage || buniInner.CustomerMessage || (buniHeader && buniHeader.statusDescription),
+    };
+    const okStatus = merged.ResponseCode === '0' || merged.ResponseCode === 0 || merged.ResponseCode === undefined;
+
+    if (!resp.ok || !okStatus) {
       console.error('[mpesa:kcb] STK push failed', resp.status, text.slice(0, 300));
       if (MODE === 'sandbox') return simulated();
       throw new Error('stk_push_failed');
     }
 
-    console.log(`[mpesa:kcb] STK push OK phone=${phone} amount=${amount} checkoutId=${body.CheckoutRequestID}`);
+    console.log(`[mpesa:kcb] STK push OK phone=${phone} amount=${amount} checkoutId=${merged.CheckoutRequestID}`);
     // Track live push for callback matching; no auto-resolve.
-    pending.set(body.CheckoutRequestID, { phone, amount, at: Date.now(), live: true });
+    pending.set(merged.CheckoutRequestID, { phone, amount, at: Date.now(), live: true });
 
-    return {
-      MerchantRequestID: body.MerchantRequestID,
-      CheckoutRequestID: body.CheckoutRequestID,
-      ResponseCode: body.ResponseCode,
-      ResponseDescription: body.ResponseDescription,
-      CustomerMessage: body.CustomerMessage,
-    };
+    return merged;
   } catch (e) {
     console.error('[mpesa:kcb] error:', e.message);
     if (MODE === 'sandbox') return simulated();
